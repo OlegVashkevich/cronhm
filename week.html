@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="title" content="Тепловая карта Cron">
+    <title>Тепловая карта Cron | Визуализация задач по крону</title>
+    <link href="style.css" rel="stylesheet">
+</head>
+
+<body>
+    <div id="mainContainer" class="container">
+        <div class="row">
+            <div class="col">
+                <h1><i class="em em-bar_chart em-svg"></i> <b>Тепловая карта Cron</b></h1>
+                <p>
+                    <a href="index.html">Карта час-минута</a><br>
+                    <a href="#" class="active">Карта по дням недели</a><br>
+                    <a href="wh.html">Карта день-час</a><br>
+                </p>
+                <p><i class="em em-information_source em-svg"></i>Ежеминутные задачи закоментированны! Что бы не создавать белый шум.</p>
+                <p><i class="em em-memo em-svg"></i> Вставьте в поле свой crontab или <a id="loadExample" href="#">загрузите пример</a>...</p>
+                <textarea class="shadow-sm" cols="2" rows="5" id="cronEntries" placeholder=""></textarea>
+                <div id="chartContainer" class="mt-2">
+                    <div id="chart"></div>
+                </div>
+            </div>
+        </div>
+        <div id="parsingErrorsRow" class="row mt-2" style="display:none">
+            <div class="col">
+                <div class="p-3 bg-danger text-white">
+                    <h5>Ошибки парсинга:</h5>
+                    <ul id="parsingErrors"></ul>
+                </div>
+            </div>
+        </div>
+        <div class="row mt-2 text-center">
+            <div class="col">
+                <p><small>Совет: вы можете нажать на поле, чтобы заморозить/разморозить информацию.</small></p>
+            </div>
+        </div>
+        <div class="row mt-2">
+            <div class="col-lg-8">
+                <div class="bg-white shadow-sm p-3" style="position: fixed;bottom: 0;left: 0; width: 100%;z-index: 1;">
+                    <h5><b><span id="details"></span>:</b></h5>
+                    <pre id="entriesLog"></pre>
+                </div>
+            </div>
+            <div class="col-lg-4 mt-3 mt-lg-0">
+                <div class="bg-white shadow-sm p-3" style="position: fixed;right: 0px;top: 0px;overflow-y: scroll;height: 100vh;">
+                    <h5><b>Наиболее частое время:</b></h5>
+                    <ul style="list-style-type:none;padding:0" id="frequentTimes"></ul>
+                </div>
+            </div>
+        </div>
+        <div class="row mt-4">
+            <div class="col-md">
+                <div class="bg-white shadow-sm p-3">
+                    <h4><b>Что это?</b></h4>
+                    <p>Задания Cron — это запланированные скрипты и команды, которые запускаются на вашем сервере. Они полезны для выполнения таких задач, как загрузка нового контента, очистка файлов или обработка данных. Однако слишком большое количество одновременно будет потреблять ресурсы вашего процессора и замедлять работу сервера.</p>
+                    <p>Этот инструмент поможет вам визуализировать ваш crontab и увидеть, где находятся "горячие точки". Затем вы можете перепланировать задания и распределить нагрузку.</p>
+                    <p>Примечание: этот визуализатор не учитывает длительность выполнения. Растягивание длительных заданий cron на несколько минут все равно приведет к тем же проблемам.</p>
+                </div>
+                <br>
+                <div class="text-center links-light">
+
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="script.js?2" type="text/javascript"></script>
+    <script src="crontab.js"></script>
+    <script>
+        var days = [
+            "Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"
+        ];
+        var colors = "#f4f8fb #ff0000".split(" "), 
+            savedPlaceholder, timer, heatmap, svg, gridSize, lockedTime = null, dataset = [], 
+            margin = {top: 20, left: 30}, hours = d3.range(0, 24, 2), minutes = d3.range(0, 60, 5), 
+            options = {currentDate: new Date("2018-12-15T00:00:00Z"), endDate: new Date("2018-12-15T23:59:59Z"), iterator: true}, 
+            subs = {"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *", "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *", "@hourly": "0 * * * *"};
+        String.prototype.replaceAll = function (a, c) {
+            return this.replace(new RegExp(a, "g"), c);
+        };
+        var flatten = function (a, c) {
+            c = undefined === c ? [] : c;
+            for (var b = 0, d = a.length; b < d; b++) {
+                var e = a[b];
+                Array.isArray(e) ? flatten(e, c) : c.push(e);
+            }
+            return c;
+        };
+        function pad(a) {
+            for (a += ""; 2 > a.length;) a = "0" + a;
+            return a;
+        }
+        function updateInfo(a, c) {
+            j = c.w;
+            a = c.h;
+            c = c.m;
+            a = lockedTime ? lockedTime[0] : a;
+            c = lockedTime ? lockedTime[1] : c;
+            var b = dataset[j][a][c].entries, d = document.getElementById("entriesLog");
+            //console.log(b);
+            document.getElementById("details").innerHTML = b.length + " cron job" + (1 == b.length ? "" : "s") + " " + days[j] + " at " + (pad(a) + ":" + pad(c));
+            d.innerHTML = b.join("\n");
+        }
+        function parseAndUpdate(a) {
+            for (var j = 0; 7 > j; j++) {
+                dataset[j] = [];
+                for (var c = 0, b = 0; 24 > b; b++) {
+                    dataset[j][b] = [];
+                    for (var d = 0; 60 > d; d++) dataset[j][b][d] = {w: j, h: b, m: d, value: 0, entries: []};
+                }
+            }
+            for (var e in subs) a = a.replaceAll(e, subs[e]);
+            b = a.split("\n");
+            parsingErrors.innerHTML = "";
+            parsingErrorsRow.style.display = "none";
+            for (d = 0; d < b.length; d++) {
+                var n = b[d];
+                e = parser.parseString(n, options);
+                //console.log(n);
+                //console.log(e.expressions);
+                //console.log(dataset);
+                for (var g in e.errors) parsingErrorsRow.style.display = "block", a = document.createElement("li"), a.innerHTML = "Line " + (d + 1) + ": '" + g + "' - " + e.errors[g], parsingErrors.appendChild(a);
+                e.expressions.forEach(function (a) {
+                    a = a.fields;
+                    //console.log(a);
+                    //if(n.indexOf("coll_create")!=-1) {
+                        //console.log(n.trim());
+                    //}
+                    for (var j = 0; j < (a.dayOfWeek.length); j++) {
+                        if(n.indexOf("coll_create")!=-1) {
+                            console.log(n.trim());
+                        }
+                        if(j==7)
+                            continue;
+                        for (var b = 0; b < a.hour.length; b++) {
+                            for (var d = 0; d < a.minute.length; d++) {
+                                var w = a.dayOfWeek[j], e = a.hour[b], h = a.minute[d];
+                                //console.log(w);
+                                //console.log(n.trim(),w,e,h);
+                                dataset[w][e][h].value += 1;
+                                dataset[w][e][h].entries.push(n.trim());
+                                c = Math.max(dataset[w][e][h].value, c);
+                            }
+                        }
+                    }
+                });
+            }
+            //console.log(dataset);
+            for (var j = 0; 7 > j; j++) {
+                var p = d3.scaleLinear().domain([0, c]).range(colors), k = d3.local();
+                g = flatten(dataset[j]).sort(function (a, b) {
+                    return b.value - a.value;
+                });
+                console.log(g[0].value);
+                d = document.getElementById("frequentTimes");
+                //d.innerHTML = "";
+                a = document.createElement("li");
+                a.innerHTML = '<strong>' + days[j] + '</strong>';
+                d.appendChild(a);
+                e = 0;
+                var m = g[0].value, f = [];
+                for (b = 0; b < g.length; b++) {
+                    var l = g[b];
+                    a = document.createElement("li");
+                    f.push(pad(l.h) + ":" + pad(l.m));
+                    if (l.value !== m) {
+                        if (5 < e++) break;
+                        f = 3 < f.length ? f.slice(0, 3).join(", ") + "&hellip;" : f.join(", ");
+                        a.innerHTML = m + " jobs at " + f;
+                        console.log(a);
+                        d.appendChild(a);
+                        a = document.createElement("li");
+                        f = [];
+                    }
+                    m = l.value;
+                }
+                heatmap = svg[j].selectAll(".hour").data(dataset[j]).enter().append("g").selectAll(".minute").data(function (a, b) {
+                    k.set(this, b);
+                    return a;
+                }).enter().append("rect").attr("y", function (a, b) {
+                    return k.get(this) * gridSize;
+                }).attr("x", function (a, b) {
+                    return b * gridSize;
+                }).attr("class", "bordered").attr("width", gridSize).attr("height", gridSize).style("stroke", "white").style("stroke-width", 1).style("stroke-opacity", 1).style("cursor", "pointer").on("mouseover", updateInfo).on("click", function (a, b) {
+                    lockedTime = lockedTime ? null : [k.get(this), b];
+                    updateInfo(a, b);
+                }).style("fill", function (a, b) {
+                    console.log(j);
+                    return p(dataset[j][k.get(this)][b].value);
+                });
+                //console.log(heatmap);
+            }
+        }
+        window.onload = function () {
+            svg = [];
+            var a = document.getElementById("cronEntries");
+            document.getElementById("parsingErrors");
+            document.getElementById("parsingErrorsRow");
+            //из crontab.js
+            a.placeholder = crontab;
+            savedPlaceholder = a.getAttribute("placeholder");
+            document.getElementById("loadExample").addEventListener("click", function (b) {
+                b.preventDefault();
+                a.value = savedPlaceholder;
+                parseAndUpdate(a.value);
+            }, false);
+            a.addEventListener("input", function () {
+                window.clearTimeout(timer);
+                timer = window.setTimeout(function () {
+                parseAndUpdate(a.value);
+                }, 750);
+            });
+            var c = Math.max(document.getElementById("mainContainer").offsetWidth, 800) - margin.left;
+            gridSize = Math.floor(c / 60);
+            for (var j = 0; 7 > j; j++) {
+                d3.select("#chart").append("h1").html(days[j]);
+                svg[j] = d3.select("#chart").append("svg").attr("id", j).attr("width", c).attr("height", 24 * gridSize + margin.top).append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+                svg[j].selectAll(".hourLabel").data(hours).enter().append("text").text(function (a) {
+                    return pad(a);
+                }).attr("x", 0).attr("y", function (a, c) {
+                    return a * gridSize;
+                }).style("text-anchor", "end").attr("transform", "translate(-6," + gridSize / 1.3 + ")");
+                svg[j].selectAll(".minuteLabel").data(minutes).enter().append("text").text(function (a) {
+                    return pad(a);
+                }).attr("x", function (a, c) {
+                    return a * gridSize;
+                }).attr("y", 0).style("text-anchor", "middle").attr("transform", "translate(" + gridSize / 2 + ", -6)");
+                
+            }
+            parseAndUpdate(a.value ? a.value : savedPlaceholder);
+        };
+    </script>
+</body></html>
